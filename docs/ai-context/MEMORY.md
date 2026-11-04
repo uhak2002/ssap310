@@ -1,0 +1,4 @@
+- [강의 목표](project-lecture-goal.md) — 유튜브 자동 편집 실습 → 유학컨설팅 자료 자동화
+- [기준 먼저, 바로 고치기](feedback-follow-reference-fix-directly.md) — 강의 화면 기준, 되묻지 말고 수정
+- [GPU 없음](environment-no-gpu.md) — CPU 전용, OCR·Whisper 느림
+- [GitHub 저장소](reference-github-repo.md) — uhak2002/ssap310 Public, 키·영상 제외

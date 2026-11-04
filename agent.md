@@ -1,6 +1,24 @@
 # agent.md — 에이전트 작업 지침
 
-이 저장소에서 작업하는 AI 에이전트(Claude Code 등)가 따를 규칙이다. 프로젝트 설명은 `CLAUDE.md` 를 본다.
+이 저장소에서 작업하는 AI 에이전트(Claude Code, Codex, Cursor 등)가 따를 규칙이다.
+프로젝트 설명은 `CLAUDE.md`, 이전 맥락은 `docs/ai-context/`, 환경 설정은 `docs/cloud-setup.md` 를 본다.
+
+## 단계(모듈) 표
+| 단계 | 메서드 | 입력 | 결과 파일 |
+|---|---|---|---|
+| 전사 | `Job._transcribe` | 영상 | `transcribe.json` |
+| 컷 편집 | `Job._cuts` | 전사 | `cuts.json` |
+| 기획 | `Job._plan` | 컷 편집 | `plan.json` |
+| 이미지 생성 | `Job._images` | 기획 | `images.json` |
+| 개인정보 탐지 | `Job._pii` | 컷 편집 | `pii.json` |
+| 최종 렌더 | `Job._render` | 컷·이미지·탐지 | `output/<영상>_edited.mp4` |
+
+## 실행·검증
+```bash
+python autoedit.py samples/test.mp4 --dry-run    # 빠른 확인
+python app.py                                    # 웹 화면 127.0.0.1:8766
+```
+변경 후에는 `--dry-run` 과 변경한 단계를 실제로 실행해 확인한다.
 
 ## 작업 방식
 1. 사용자가 기준 자료(강의 화면 등)를 주면 그것이 기준이다. 추측으로 최소 버전을 만들지 않는다.

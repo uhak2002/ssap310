@@ -1,0 +1,27 @@
+# 비밀 값 (API 키) — 절대 커밋하지 않음
+.env
+.env.*
+!.env.example
+
+# 영상·결과물·캐시 (용량이 크고 개인 자료)
+uploads/
+samples/
+output/
+work/
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.wav
+
+# 파이썬
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 편집기·OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

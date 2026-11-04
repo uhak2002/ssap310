@@ -1,0 +1,8 @@
+faster-whisper
+opencv-python<5
+numpy
+python-dotenv
+anthropic
+openai
+pillow
+easyocr

@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>유튜브 자동 편집</title>
+<style>
+:root{--ink:#1c1b2e;--paper:#fff8e6;--bg:#1f2a44;--accent:#ffc83d;--ok:#bfe8c4;--run:#ffd98a;--line:3px solid var(--ink)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif;font-size:15px}
+header{background:var(--accent);border-bottom:var(--line);padding:16px 24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+header h1{margin:0;font-size:26px}
+header p{margin:4px 0 0;font-size:14px}
+.badge{background:#fff;border:var(--line);border-radius:999px;padding:6px 14px;font-weight:700;font-size:13px}
+main{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr);gap:20px;padding:20px;max-width:1300px;margin:0 auto}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+.col{display:flex;flex-direction:column;gap:20px;min-width:0}
+.card{background:var(--paper);border:var(--line);border-radius:14px;padding:18px;box-shadow:6px 6px 0 #0d1424}
+.card h2{margin:0 0 12px;font-size:18px;display:flex;align-items:center;gap:8px}
+.num{background:var(--accent);border:var(--line);border-radius:50%;width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;font-size:14px}
+button{font:inherit;font-weight:700;background:#fff;border:var(--line);border-radius:10px;padding:8px 14px;cursor:pointer;color:var(--ink)}
+button:hover:not(:disabled){background:var(--accent)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.primary{background:var(--accent);font-size:17px;padding:12px 22px}
+.drop{border:3px dashed var(--ink);border-radius:12px;padding:22px;text-align:center;cursor:pointer;background:#fff}
+.drop.over{background:var(--run)}
+.drop small{display:block;color:#6b6a7c;margin-top:6px;word-break:break-all}
+.vid{border:var(--line);border-radius:12px;padding:10px 12px;margin-top:12px;background:#fff;cursor:pointer}
+.vid.sel{background:var(--run)}
+.vid b{display:block;word-break:break-all}
+.vid small{color:#6b6a7c}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chip{font-size:12px;border:2px solid var(--ink);border-radius:999px;padding:2px 9px;background:#fff}
+.chip.ok{background:var(--ok)}
+.row{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;margin:8px 0}
+label{display:inline-flex;align-items:center;gap:6px;font-weight:600}
+select,input[type=number],input[type=password]{font:inherit;border:var(--line);border-radius:10px;padding:6px 8px;background:#fff;max-width:100%}
+input[type=number]{width:84px}
+input[type=checkbox]{width:18px;height:18px;accent-color:var(--ink)}
+details{margin-top:8px}
+summary{cursor:pointer;font-weight:700}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px 14px;margin-top:10px}
+.state{font-size:13px;border:2px solid var(--ink);border-radius:999px;padding:2px 10px;background:#fff}
+.state.run{background:var(--run)}
+.stages{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:10px;margin:14px 0 8px}
+.stages button{display:flex;flex-direction:column;align-items:center;padding:10px 6px;line-height:1.25}
+.stages button small{font-weight:400;font-size:11px;color:#55546a}
+.stages button.ok{background:var(--ok)}
+.hint{font-size:13px;color:#55546a;margin:6px 0}
+#log{background:#14131f;color:#d6f5d6;border-radius:10px;padding:12px;height:250px;overflow:auto;font:12.5px/1.55 Consolas,monospace;white-space:pre-wrap;margin-top:10px}
+video{width:100%;max-height:420px;border:var(--line);border-radius:12px;margin-top:12px;background:#000}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>🎬 유튜브 자동 편집</h1>
+    <p>전사 → 무음/추임새 컷 → 일러스트·오버레이 기획 → 개인정보 모자이크 → 렌더</p>
+  </div>
+  <div class="badge">장치: <span id="device">…</span></div>
+</header>
+
+<main>
+<div class="col">
+  <section class="card">
+    <h2><span class="num">1</span>영상</h2>
+    <div class="drop" id="drop">영상을 여기에 끌어다 놓거나 클릭해서 선택<small id="upmsg"></small></div>
+    <input type="file" id="file" accept="video/*" hidden>
+    <div id="videos"></div>
+    <div class="row" style="margin-top:14px">
+      <button id="refresh">새로고침</button>
+      <button id="clear">선택 영상 캐시 삭제</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2><span class="num">⚙</span>설정 (API 키)</h2>
+    <div class="row"><label>Claude (기획) <span class="state" id="k-anthropic">…</span></label></div>
+    <div class="row"><input type="password" id="anthropic" placeholder="sk-ant-… (바꿀 때만 입력)" autocomplete="off" style="width:100%"></div>
+    <div class="row"><label>OpenAI (그림 생성) <span class="state" id="k-openai">…</span></label></div>
+    <div class="row"><input type="password" id="openai" placeholder="sk-… (바꿀 때만 입력)" autocomplete="off" style="width:100%"></div>
+    <div class="row"><button id="savekeys">키 저장</button><span class="hint">키는 이 PC의 .env 파일에만 저장됩니다.</span></div>
+  </section>
+</div>
+
+<div class="col">
+  <section class="card">
+    <h2><span class="num">2</span>옵션</h2>
+    <div class="row">
+      <label><input type="checkbox" id="cut" checked>무음·추임새 컷</label>
+      <label><input type="checkbox" id="illustrations" checked>설명 일러스트</label>
+      <label><input type="checkbox" id="logos" checked>로고·아이콘 오버레이</label>
+      <label><input type="checkbox" id="mosaic" checked>개인정보 모자이크</label>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="faces">얼굴 모자이크</label>
+      <label><input type="checkbox" id="mute_pii">음성 개인정보 음소거</label>
+    </div>
+    <div class="row">
+      <label>일러스트 위치
+        <select id="ill_mode"><option value="center">중앙 카드</option><option value="cutaway">전체 화면</option><option value="pip">우측 하단 카드</option></select></label>
+      <label>Whisper
+        <select id="whisper_model"><option value="auto">자동</option><option>small</option><option>medium</option><option>large-v3</option></select></label>
+      <label>그림 생성
+        <select id="image_provider"><option value="auto">자동</option><option value="openai">OpenAI</option><option value="placeholder">플레이스홀더</option></select></label>
+    </div>
+    <details>
+      <summary>세부 조절</summary>
+      <div class="grid">
+        <label>무음 기준(dB) <input type="number" id="silence_db" value="-35" step="1"></label>
+        <label>이 길이(초) 이상 무음 <input type="number" id="min_silence" value="0.6" step="0.1" min="0.1"></label>
+        <label>남길 무음(초) <input type="number" id="keep_silence" value="0.3" step="0.1" min="0"></label>
+        <label><input type="checkbox" id="remove_stutters" checked>반복어 제거</label>
+        <label>화면 검사 간격(초) <input type="number" id="ocr_interval" value="1.0" step="0.5" min="0.2"></label>
+        <label>분당 최대 장면 <input type="number" id="max_scenes_per_min" value="1.5" step="0.5" min="0.5"></label>
+        <label>이미지 품질 <select id="image_quality"><option>low</option><option selected>medium</option><option>high</option></select></label>
+      </div>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2><span class="num">3</span>실행 <span class="state" id="state">대기</span></h2>
+    <div class="row">
+      <button class="primary" id="all">▶ 전체 실행</button>
+      <label><input type="checkbox" id="force">이 단계 강제 재실행(캐시 무시)</label>
+    </div>
+    <div class="stages" id="stages"></div>
+    <p class="hint">단계 버튼은 앞 단계 결과가 있으면 재사용하고, 없으면 자동으로 먼저 실행합니다. 초록색은 결과가 저장된 단계입니다.</p>
+    <div id="log"></div>
+    <div id="result"></div>
+  </section>
+</div>
+</main>
+
+<script>
+const LABELS = [["transcribe","전사","Whisper"],["cuts","컷 편집","무음·추임새"],["plan","기획","Claude"],
+  ["images","이미지 생성","일러스트·아이콘"],["pii","개인정보 탐지","OCR"],["render","최종 렌더","모자이크·합성"]];
+const $ = id => document.getElementById(id);
+let selected = null, running = false, next = 0, stageState = {}, lastOutput = null;
+
+function opts(){
+  const o = {};
+  for (const id of ["cut","illustrations","logos","mosaic","faces","mute_pii","remove_stutters"]) o[id] = $(id).checked;
+  for (const id of ["ill_mode","whisper_model","image_provider","image_quality"]) o[id] = $(id).value;
+  for (const id of ["silence_db","min_silence","keep_silence","ocr_interval","max_scenes_per_min"]) o[id] = parseFloat($(id).value);
+  return o;
+}
+async function api(path, body){
+  const r = await fetch(path, body === undefined ? {} : {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+  if (!r.ok) { let m = r.statusText; try { m = (await r.json()).detail || m } catch(e){}; throw new Error(m); }
+  return r.json();
+}
+function addLog(lines){ if(!lines.length) return; const l=$("log"); l.textContent += lines.join("\n")+"\n"; l.scrollTop=l.scrollHeight; }
+
+function renderStages(){
+  $("stages").innerHTML = "";
+  for (const [id,name,sub] of LABELS){
+    const b = document.createElement("button");
+    b.className = stageState[id] ? "ok" : "";
+    b.innerHTML = `${name}<small>${sub}</small>`;
+    b.disabled = running || !selected;
+    b.onclick = () => run(id);
+    $("stages").appendChild(b);
+  }
+  $("all").disabled = running || !selected;
+  $("clear").disabled = running || !selected;
+}
+async function refreshStatus(){
+  if (!selected) { stageState = {}; renderStages(); return; }
+  try {
+    const s = await api("/api/status", {video:selected, opts:opts()});
+    stageState = s.stages; lastOutput = s.output;
+    $("result").innerHTML = s.output ? `<video controls src="/api/output/${encodeURIComponent(s.output)}?t=${Date.now()}"></video>` : "";
+  } catch(e){ stageState = {}; }
+  renderStages(); renderVideos();
+}
+let videos = [];
+function renderVideos(){
+  const box = $("videos"); box.innerHTML = "";
+  for (const v of videos){
+    const d = document.createElement("div");
+    d.className = "vid" + (v.name === selected ? " sel" : "");
+    const chips = v.name === selected ? LABELS.map(([id,n]) => `<span class="chip ${stageState[id]?"ok":""}">${n}</span>`).join("") : "";
+    d.innerHTML = `<b>${v.name}</b><small>${v.folder}/ · ${v.mb} MB</small><div class="chips">${chips}</div>`;
+    d.onclick = () => { selected = v.name; refreshStatus(); };
+    box.appendChild(d);
+  }
+}
+async function loadVideos(){ videos = await api("/api/videos"); if (!selected && videos.length) selected = videos[0].name; renderVideos(); await refreshStatus(); }
+
+async function run(stage){
+  if (!selected) return;
+  try { await api("/api/run", {video:selected, stage, force:$("force").checked && stage !== "render" ? true : $("force").checked, opts:opts()}); poll(); }
+  catch(e){ addLog(["✗ " + e.message]); }
+}
+async function poll(){
+  try {
+    const s = await api("/api/state?since=" + next);
+    next = s.next; addLog(s.logs);
+    $("device").textContent = s.device;
+    const was = running; running = s.running;
+    $("state").textContent = running ? "실행 중: " + s.label : "대기"; $("state").className = "state" + (running ? " run" : "");
+    for (const k of ["anthropic","openai"]) { $("k-"+k).textContent = s.keys[k] ? "설정됨 ("+s.masked[k]+")" : "없음"; }
+    if (was && !running) refreshStatus(); else renderStages();
+  } catch(e){}
+  setTimeout(poll, running ? 1000 : 3000);
+}
+
+$("all").onclick = () => run("render");
+$("refresh").onclick = loadVideos;
+$("clear").onclick = async () => { if (selected && confirm("선택한 영상의 저장된 단계 결과를 모두 삭제할까요?")) { await api("/api/clear-cache", {video:selected, opts:opts()}); refreshStatus(); } };
+$("savekeys").onclick = async () => { await api("/api/settings", {anthropic:$("anthropic").value, openai:$("openai").value}); $("anthropic").value = $("openai").value = ""; poll(); };
+for (const el of document.querySelectorAll("input,select")) if (!["file","anthropic","openai","force"].includes(el.id)) el.addEventListener("change", refreshStatus);
+
+const drop = $("drop");
+drop.onclick = () => $("file").click();
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]); };
+$("file").onchange = e => { if (e.target.files[0]) upload(e.target.files[0]); };
+async function upload(f){
+  $("upmsg").textContent = "업로드 중… " + f.name;
+  const fd = new FormData(); fd.append("file", f);
+  try { const r = await fetch("/api/upload", {method:"POST", body:fd}); if (!r.ok) throw new Error((await r.json()).detail);
+    selected = (await r.json()).name; $("upmsg").textContent = "업로드 완료: " + selected; await loadVideos(); }
+  catch(e){ $("upmsg").textContent = "업로드 실패: " + e.message; }
+}
+renderStages(); loadVideos(); poll();
+</script>
+</body>
+</html>

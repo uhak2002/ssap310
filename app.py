@@ -48,7 +48,7 @@ def make_cfg(opts):
 
 def mask(key):
     v = os.environ.get(key, "")
-    return f"{v[:6]}...{v[-4:]}" if len(v) > 12 else ""
+    return f"{v[:4]}...{v[-4:]}" if len(v) > 12 else ""
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -61,7 +61,8 @@ def get_state(since: int = 0):
     with lock:
         logs = state["logs"][since:]
         n = len(state["logs"])
-    return {"device": stages.device_info(), "running": state["running"], "label": state["label"],
+    return {"device": stages.device_info(), "whisper_default": "large-v3" if stages.cuda_available() else "small",
+            "running": state["running"], "label": state["label"],
             "logs": logs, "next": n, "keys": {k: bool(os.environ.get(v)) for k, v in KEYS.items()},
             "masked": {k: mask(v) for k, v in KEYS.items()}}
 
@@ -110,8 +111,9 @@ def run_stage(body: dict):
 
     def work():
         try:
-            log(f"── {video.name}  {stages.probe(video)[0]:.1f}초")
-            stages.Job(video, cfg, log=log).ensure(stage, force=force)
+            job = stages.Job(video, cfg, log=log)
+            job.header()
+            job.ensure(stage, force=force)
             log("완료")
         except Exception as e:  # 단계 실패가 서버를 죽이지 않게
             log(f"✗ 오류: {e}")

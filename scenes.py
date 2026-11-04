@@ -91,13 +91,18 @@ def make_image(scene, cfg, orientation, work_dir):
     if provider == "auto":
         provider = "openai" if os.environ.get("OPENAI_API_KEY") else "placeholder"
     if provider == "openai":
-        try:
-            from openai import OpenAI
-            r = OpenAI().images.generate(model=cfg.image_model, prompt=prompt, size=size,
-                                         quality=cfg.image_quality, n=1)
-            path.write_bytes(base64.b64decode(r.data[0].b64_json))
-            return path
-        except Exception as e:  # 결제/한도/정책 오류 등 어떤 경우에도 영상 작업은 계속
-            print(f"  경고: 이미지 생성 실패({type(e).__name__}) → 플레이스홀더로 대체")
+        from openai import OpenAI
+        # 계정에 해당 모델이 없으면(does not exist) 다음 후보 모델로 재시도
+        models = [cfg.image_model] + [m for m in ("gpt-image-1-mini",) if m != cfg.image_model]
+        for model in models:
+            try:
+                r = OpenAI().images.generate(model=model, prompt=prompt, size=size, quality=cfg.image_quality, n=1)
+                path.write_bytes(base64.b64decode(r.data[0].b64_json))
+                return path
+            except Exception as e:  # 결제/한도/정책 오류 등 어떤 경우에도 영상 작업은 계속
+                print(f"  경고: 이미지 생성 실패[{model}]({type(e).__name__}: {str(e)[:120]})")
+                if "does not exist" not in str(e):
+                    break
+        print("  → 플레이스홀더로 대체")
     _placeholder(path, size, scene.get("caption", ""))
     return path

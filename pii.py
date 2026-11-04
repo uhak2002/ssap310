@@ -51,6 +51,26 @@ class PiiOcr:
         import easyocr
         self.reader = easyocr.Reader(["ko", "en"], gpu=device in ("auto", "cuda"), verbose=False)
 
+    def find_batch(self, frames, max_side=1280):
+        """프레임 여러 장을 한 번에 인식(배치). 모든 프레임은 같은 크기여야 한다. 박스 목록의 목록을 반환."""
+        if not frames:
+            return []
+        h, w = frames[0].shape[:2]
+        scale = min(1.0, max_side / max(h, w))
+        smalls = [cv2.resize(f, None, fx=scale, fy=scale) if scale < 1 else f for f in frames]
+        sh, sw = smalls[0].shape[:2]
+        results = self.reader.readtext_batched(smalls, n_width=sw, n_height=sh, batch_size=len(smalls))
+        out = []
+        for res in results:
+            boxes = []
+            for pts, text, _conf in res:
+                label = match_pii(text)
+                if label:
+                    xs, ys = [p[0] / scale for p in pts], [p[1] / scale for p in pts]
+                    boxes.append((int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys)), label))
+            out.append(boxes)
+        return out
+
     def find(self, frame, max_side=1280):
         """속도를 위해 긴 변을 max_side 로 줄여 읽고, 좌표는 원본 기준으로 되돌린다."""
         h, w = frame.shape[:2]

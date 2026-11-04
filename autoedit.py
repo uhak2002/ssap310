@@ -34,6 +34,7 @@ def main():
         logos=False if a.no_logos else None, mosaic=False if a.no_mosaic else None,
         faces=True if a.faces else None, mute_pii=True if a.mute_pii else None, ill_mode=a.mode)
     job = stages.Job(a.video, cfg)
+    job.header()
     target = "cuts" if a.dry_run else a.stage
     job.ensure(target, force=a.force)
     if a.dry_run:

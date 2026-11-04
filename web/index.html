@@ -55,7 +55,7 @@ video{width:100%;max-height:420px;border:var(--line);border-radius:12px;margin-t
 <header>
   <div>
     <h1>🎬 유튜브 자동 편집</h1>
-    <p>전사 → 무음/추임새 컷 → 일러스트·오버레이 기획 → 개인정보 모자이크 → 렌더</p>
+    <p>전사 → 무음/추임새 컷 → 일러스트·오버레이 기획 → 개인정보 모자이크 → 렌더</p><!-- 강의 화면과 동일한 문구 -->
   </div>
   <div class="badge">장치: <span id="device">…</span></div>
 </header>
@@ -100,7 +100,7 @@ video{width:100%;max-height:420px;border:var(--line);border-radius:12px;margin-t
       <label>일러스트 위치
         <select id="ill_mode"><option value="center">중앙 카드</option><option value="cutaway">전체 화면</option><option value="pip">우측 하단 카드</option></select></label>
       <label>Whisper
-        <select id="whisper_model"><option value="auto">자동</option><option>small</option><option>medium</option><option>large-v3</option></select></label>
+        <select id="whisper_model"><option>large-v3</option><option>medium</option><option>small</option></select></label>
       <label>그림 생성
         <select id="image_provider"><option value="auto">자동</option><option value="openai">OpenAI</option><option value="placeholder">플레이스홀더</option></select></label>
     </div>
@@ -134,9 +134,9 @@ video{width:100%;max-height:420px;border:var(--line);border-radius:12px;margin-t
 
 <script>
 const LABELS = [["transcribe","전사","Whisper"],["cuts","컷 편집","무음·추임새"],["plan","기획","Claude"],
-  ["images","이미지 생성","일러스트·아이콘"],["pii","개인정보 탐지","OCR"],["render","최종 렌더","모자이크·합성"]];
+  ["images","이미지 생성","일러스트·아이콘"],["pii","개인정보 탐지","OCR"],["render","최종 렌더","모자이크+합성"]];
 const $ = id => document.getElementById(id);
-let selected = null, running = false, next = 0, stageState = {}, lastOutput = null;
+let selected = null, running = false, next = 0, stageState = {}, lastOutput = null, statusMap = {}, whisperSet = false;
 
 function opts(){
   const o = {};
@@ -167,6 +167,9 @@ function renderStages(){
 }
 async function refreshStatus(){
   if (!selected) { stageState = {}; renderStages(); return; }
+  for (const v of videos) {
+    try { statusMap[v.name] = (await api("/api/status", {video:v.name, opts:opts()})).stages; } catch(e){ statusMap[v.name] = {}; }
+  }
   try {
     const s = await api("/api/status", {video:selected, opts:opts()});
     stageState = s.stages; lastOutput = s.output;
@@ -180,7 +183,8 @@ function renderVideos(){
   for (const v of videos){
     const d = document.createElement("div");
     d.className = "vid" + (v.name === selected ? " sel" : "");
-    const chips = v.name === selected ? LABELS.map(([id,n]) => `<span class="chip ${stageState[id]?"ok":""}">${n}</span>`).join("") : "";
+    const st = statusMap[v.name] || {};
+    const chips = LABELS.map(([id,n]) => `<span class="chip ${st[id]?"ok":""}">${n}</span>`).join("");
     d.innerHTML = `<b>${v.name}</b><small>${v.folder}/ · ${v.mb} MB</small><div class="chips">${chips}</div>`;
     d.onclick = () => { selected = v.name; refreshStatus(); };
     box.appendChild(d);
@@ -199,7 +203,8 @@ async function poll(){
     next = s.next; addLog(s.logs);
     $("device").textContent = s.device;
     const was = running; running = s.running;
-    $("state").textContent = running ? "실행 중: " + s.label : "대기"; $("state").className = "state" + (running ? " run" : "");
+    if (!whisperSet) { $("whisper_model").value = s.whisper_default; whisperSet = true; }
+    $("state").textContent = running ? "실행 중" : "대기"; $("state").className = "state" + (running ? " run" : "");
     for (const k of ["anthropic","openai"]) { $("k-"+k).textContent = s.keys[k] ? "설정됨 ("+s.masked[k]+")" : "없음"; }
     if (was && !running) refreshStatus(); else renderStages();
   } catch(e){}

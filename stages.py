@@ -23,8 +23,9 @@ import pii
 import scenes as scn
 
 STAGES = ["transcribe", "cuts", "plan", "images", "pii", "render"]
-LABELS = {"transcribe": "전사", "cuts": "컷 편집", "plan": "기획", "images": "이미지 생성",
-          "pii": "개인정보 탐지", "render": "최종 렌더"}
+LABELS = {"transcribe": "전사 (faster-whisper)", "cuts": "컷 편집", "plan": "시각 요소 기획",
+          "images": "이미지 생성", "pii": "개인정보 탐지", "render": "최종 렌더"}
+PIPELINE_TEXT = "전사 → 컷 편집 → 시각 요소 기획 → 이미지 생성 → 개인정보 탐지 → 최종 렌더"
 DEPS = {"transcribe": [], "cuts": ["transcribe"], "plan": ["cuts"], "images": ["plan"],
         "pii": ["cuts"], "render": ["cuts", "images", "pii"]}
 PARAMS = {
@@ -56,12 +57,13 @@ class Cfg:
     illustrations: bool = True
     ill_mode: str = "center"  # center(중앙 카드) | cutaway(전체 화면) | pip(우측 카드)
     logos: bool = True
-    logo_dir: str = "./logos"
+    logo_dir: str = "./로고"
     max_scenes_per_min: float = 1.5
     claude_model: str = "claude-opus-5-5"
     image_provider: str = "auto"
     image_model: str = "gpt-image-1"
     image_quality: str = "medium"
+    image_concurrency: int = 4  # 이미지 동시 생성 개수 (API 한도에 걸리면 낮추세요)
     mosaic: bool = True
     ocr_interval: float = 0.5
     faces: bool = False
@@ -79,10 +81,11 @@ class Cfg:
             language=e("LANGUAGE", "ko"), silence_db=float(e("SILENCE_DB", "-35")),
             min_silence=float(e("MIN_SILENCE", "0.6")), keep_silence=float(e("KEEP_SILENCE", "0.3")),
             remove_stutters=_b("REMOVE_STUTTERS", True), illustrations=_b("ILLUSTRATIONS", True),
-            ill_mode=e("ILLUSTRATION_MODE", "center"), logos=_b("LOGOS", True), logo_dir=e("LOGO_DIR", "./logos"),
+            ill_mode=e("ILLUSTRATION_MODE", "center"), logos=_b("LOGOS", True), logo_dir=e("LOGO_DIR", "./로고"),
             max_scenes_per_min=float(e("MAX_SCENES_PER_MIN", "1.5")), claude_model=e("CLAUDE_MODEL", "claude-opus-5-5"),
             image_provider=e("IMAGE_PROVIDER", "auto"), image_model=e("IMAGE_MODEL", "gpt-image-1"),
-            image_quality=e("IMAGE_QUALITY", "medium"), mosaic=_b("MOSAIC", True),
+            image_quality=e("IMAGE_QUALITY", "medium"), image_concurrency=int(e("IMAGE_CONCURRENCY", "4")),
+            mosaic=_b("MOSAIC", True),
             ocr_interval=float(e("OCR_INTERVAL", "0.5")), faces=_b("BLUR_FACES", False),
             mute_pii=_b("MUTE_SPOKEN_PII", False), codec=e("VIDEO_CODEC", "auto"), quality=int(e("VIDEO_QUALITY", "19")),
             out_dir=e("OUT_DIR", "./output"), work_dir=e("WORK_DIR", "./work"),
@@ -193,6 +196,14 @@ class Job:
         self.dir = Path(cfg.work_dir) / f"{self.video.stem}-{tag}"
         self.dir.mkdir(parents=True, exist_ok=True)
         self.duration, self.W, self.H = probe(self.video)
+        cap = cv2.VideoCapture(str(self.video))
+        self.fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        cap.release()
+
+    def header(self):
+        """실행 시작 시 로그 머리말 (영상 정보 + 단계 목록)."""
+        self.log(f"─── {self.video.name}  {self.W}x{self.H}  {self.fps:.1f}fps  {self.duration:.1f}s")
+        self.log(f"  단계: {PIPELINE_TEXT}")
 
     # 캐시
     def _file(self, stage):
@@ -232,6 +243,8 @@ class Job:
         if not force and self.valid(stage):
             self.log(f"✓ {LABELS[stage]} (캐시 사용)")
             return self.load(stage)
+        if stage == "transcribe":
+            self._extract_audio()
         self.log(f"▶ {LABELS[stage]}")
         t0 = time.time()
         key = self.expected_key(stage)
@@ -242,32 +255,38 @@ class Job:
         return data
 
     # 1) 전사
+    def _extract_audio(self):
+        wav = self.dir / "audio.wav"
+        self.log("▶ 오디오 추출")
+        t0 = time.time()
+        if not wav.exists():
+            run(["ffmpeg", "-y", "-v", "error", "-i", str(self.video), "-vn", "-ac", "1", "-ar", "16000", str(wav)])
+        self.log(f"✓ 오디오 추출 ({time.time() - t0:.1f}s)")
+
     def _transcribe(self):
         import wave
         import numpy as np
         from faster_whisper import WhisperModel
         wav = self.dir / "audio.wav"
-        if not wav.exists():
-            self.log("  오디오 추출")
-            run(["ffmpeg", "-y", "-v", "error", "-i", str(self.video), "-vn", "-ac", "1", "-ar", "16000", str(wav)])
         with wave.open(str(wav)) as f:
             audio = np.frombuffer(f.readframes(f.getnframes()), np.int16).astype(np.float32) / 32768.0
         gpu = cuda_available() and self.cfg.whisper_device != "cpu"
         size = self.cfg.whisper_model
         if size == "auto":
             size = "large-v3" if gpu else "small"
-        self.log(f"  Whisper 모델 로드: {size} ({'cuda/float16' if gpu else 'cpu/int8'})")
+        self.log(f"  whisper 모델 로드: {size} ({'cuda/float16' if gpu else 'cpu/int8'})")
         model = WhisperModel(size, device="cuda" if gpu else "cpu", compute_type="float16" if gpu else "int8")
         segments, _ = model.transcribe(
             audio, language=self.cfg.language, word_timestamps=True, vad_filter=False,
             initial_prompt="음... 어... 그, 어, 음, 그러니까 어... 음...")  # 필러워드 누락 방지
-        words, text = [], []
+        words, text, n_seg = [], [], 0
         for seg in segments:
+            n_seg += 1
             text.append(seg.text.strip())
             for w in seg.words or []:
                 words.append({"word": w.word.strip(), "start": w.start, "end": w.end})
             self.log(f"  전사 {seg.end:.0f}/{self.duration:.0f}초")
-        self.log(f"  전사 완료: 단어 {len(words)}개")
+        self.log(f"  전사 완료: 세그먼트 {n_seg}개, 단어 {len(words)}개")
         return {"words": words, "text": " ".join(text)}
 
     # 2) 컷 편집 (컷 구간 계산만, 렌더는 최종 단계)
@@ -330,8 +349,14 @@ class Job:
         mapped = [{"word": w["word"], "start": map_time(w["start"], keeps), "end": map_time(w["end"], keeps)}
                   for w in words if norm(w["word"]) not in FILLERS]
         logos = self._logo_files() if c.logos else {}
-        scenes, logo_items = scn.plan_scenes(scn.lines_from_words(mapped), cuts["edited_duration"], c,
-                                             list(logos) if logos else [])
+        try:
+            scenes, logo_items = scn.plan_scenes(scn.lines_from_words(mapped), cuts["edited_duration"], c,
+                                                 list(logos) if logos else [])
+        except Exception as e:
+            msg = str(e)
+            if "credit balance" in msg:
+                msg = "Claude API 크레딧이 부족합니다. Anthropic 콘솔 Plans & Billing 에서 충전하세요."
+            raise RuntimeError(f"Claude 기획 실패 — {msg[:200]}") from None
         if not c.illustrations:
             scenes = []
         out["scenes"] = scenes
@@ -341,12 +366,23 @@ class Job:
 
     # 4) 이미지 생성
     def _images(self):
-        plan, out = self.load("plan"), []
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        scenes = self.load("plan")["scenes"]
         o = "portrait" if self.H > self.W * 1.1 else "landscape" if self.W > self.H * 1.1 else "square"
-        for i, s in enumerate(plan["scenes"], 1):
-            self.log(f"  이미지 {i}/{len(plan['scenes'])}: {s.get('caption') or s['image_prompt'][:30]}")
-            out.append({**s, "image": str(scn.make_image(s, self.cfg, o, self.dir))})
-        return {"scenes": out}
+        n = len(scenes)
+        if not n:
+            return {"scenes": []}
+        workers = max(1, min(self.cfg.image_concurrency, n))
+        self.log(f"  이미지 {n}장 병렬 생성 (동시 {workers}개)")
+        paths = [None] * n
+        # 이미지 생성은 API 대기 시간이 대부분이라 스레드로 동시에 요청한다.
+        with ThreadPoolExecutor(workers) as ex:
+            futs = {ex.submit(scn.make_image, s, self.cfg, o, self.dir): i for i, s in enumerate(scenes)}
+            for k, f in enumerate(as_completed(futs), 1):
+                i = futs[f]
+                paths[i] = str(f.result())
+                self.log(f"  이미지 {k}/{n} 완료: {scenes[i].get('caption') or scenes[i]['image_prompt'][:30]}")
+        return {"scenes": [{**s, "image": p} for s, p in zip(scenes, paths)]}
 
     # 5) 개인정보 탐지 (화면 글자 OCR)
     def _pii(self):
@@ -360,11 +396,25 @@ class Job:
         except ImportError:
             self.log("  easyocr 미설치 → 건너뜀 (pip install easyocr)")
             return out
+        import numpy as np
         cuts = self.load("cuts")["cuts"]
         cap = cv2.VideoCapture(str(self.video))
         fps = cap.get(cv2.CAP_PROP_FPS)
         step = max(1, int(fps * c.ocr_interval))
-        total, idx, done = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)), 0, 0
+        idx, last_ocr, last_small = 0, None, None
+        pending, ocr_n, static_n = [], 0, 0  # pending: (샘플 번호, 프레임)
+        samples = out["samples"]
+
+        def flush():
+            nonlocal ocr_n
+            if not pending:
+                return
+            for (i, _), boxes in zip(pending, ocr.find_batch([f for _, f in pending])):
+                samples[i]["boxes"] = [list(b) for b in boxes]
+            ocr_n += len(pending)
+            pending.clear()
+            self.log(f"  화면 검사 {samples[-1]['t']:.0f}/{self.duration:.0f}초 (OCR {ocr_n}회, 정적 화면 건너뜀 {static_n}회)")
+
         while True:
             if not cap.grab():
                 break
@@ -372,15 +422,25 @@ class Job:
             if idx % step == 0 and not any(s <= t <= e for s, e, _ in cuts):
                 ok, frame = cap.retrieve()
                 if ok:
-                    boxes = [list(b) for b in ocr.find(frame)]
-                    out["samples"].append({"t": round(t, 2), "boxes": boxes})
-                    done += 1
-                    if done % 10 == 0:
-                        self.log(f"  화면 검사 {t:.0f}/{self.duration:.0f}초, 개인정보 의심 {sum(1 for s in out['samples'] if s['boxes'])}곳")
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    small = cv2.resize(gray, (96, max(1, 96 * gray.shape[0] // gray.shape[1]))).astype(np.int16)
+                    samples.append({"t": round(t, 2), "boxes": []})
+                    if last_small is not None and np.abs(small - last_small).mean() < 1.5:
+                        samples[-1]["same_as"] = last_ocr  # 화면이 안 바뀜 → 이전 OCR 결과 재사용
+                        static_n += 1
+                    else:
+                        last_small, last_ocr = small, len(samples) - 1
+                        pending.append((last_ocr, frame))
+                        if len(pending) >= 4:
+                            flush()
             idx += 1
         cap.release()
-        hit = sum(1 for s in out["samples"] if s["boxes"])
-        self.log(f"  화면 {len(out['samples'])}회 검사, 개인정보 글자 검출 {hit}회")
+        flush()
+        for s in samples:
+            if "same_as" in s:
+                s["boxes"] = samples[s.pop("same_as")]["boxes"]
+        hit = sum(1 for s in samples if s["boxes"])
+        self.log(f"  화면 {len(samples)}회 검사(OCR {ocr_n}회, 정적 화면 건너뜀 {static_n}회), 개인정보 글자 검출 {hit}회")
         return out
 
     # 6) 최종 렌더

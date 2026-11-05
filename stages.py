@@ -38,6 +38,7 @@ PARAMS = {
     "pii": ["mosaic", "ocr_interval"],
     "render": ["faces", "mute_pii", "ill_mode", "codec", "quality"],
 }
+VERSIONS = {"transcribe": 2}  # 2: VAD·환각 제거 도입
 FILLERS = {"어", "음", "으", "으음", "어어", "음음", "아", "에", "엄", "흠"}
 
 
@@ -160,7 +161,9 @@ def video_args(cfg):
     q = str(cfg.quality)
     if codec == "h264_nvenc":
         return ["-c:v", "h264_nvenc", "-cq", q, "-preset", "p5", "-pix_fmt", "yuv420p"]
-    return ["-c:v", "libx264", "-crf", q, "-pix_fmt", "yuv420p"]
+    # CPU 인코딩은 veryfast 로 속도를 우선한다 (4K 렌더가 크게 빨라지고 화질 차이는 작다)
+    return ["-c:v", "libx264", "-preset", os.environ.get("VIDEO_PRESET", "veryfast"), "-crf", q,
+            "-pix_fmt", "yuv420p"]
 
 
 def norm(word):
@@ -189,6 +192,21 @@ def make_inverse(keeps):
         i = max(0, bisect.bisect_right(accs, t) - 1)
         return keeps[i][0] + (t - accs[i])
     return inv
+
+
+def drop_repeat_runs(words, min_run=5):
+    """같은 단어가 min_run 번 이상 연속되면 Whisper 환각으로 보고 그 구간을 지운다. (제거한 단어 수 반환)"""
+    out, dropped, i = [], 0, 0
+    while i < len(words):
+        j = i
+        while j + 1 < len(words) and norm(words[j + 1]["word"]) == norm(words[i]["word"]) != "":
+            j += 1
+        if j - i + 1 >= min_run:
+            dropped += j - i + 1
+        else:
+            out.extend(words[i:j + 1])
+        i = j + 1
+    return out, dropped
 
 
 def pixelate(frame, box, block=14):
@@ -291,6 +309,7 @@ class Job:
 
     def expected_key(self, stage):
         h = hashlib.sha1(json.dumps({p: getattr(self.cfg, p) for p in PARAMS[stage]}, sort_keys=True).encode())
+        h.update(str(VERSIONS.get(stage, 0)).encode())  # 단계 코드가 바뀌면 이전 캐시를 무효화
         for d in DEPS[stage]:
             up = self.load(d)
             if not up:
@@ -350,18 +369,23 @@ class Job:
             size = "large-v3" if gpu else "small"
         self.log(f"  whisper 모델 로드: {size} ({'cuda/float16' if gpu else 'cpu/int8'})")
         model = WhisperModel(size, device="cuda" if gpu else "cpu", compute_type="float16" if gpu else "int8")
+        # 필러워드 유도 프롬프트는 말이 없는 구간에서 "음, 음, ..." 환각을 부르므로, 음성 구간만 읽게(VAD) 하고
+        # 앞 문장에 끌려가는 반복 루프를 막는다(condition_on_previous_text=False).
         segments, _ = model.transcribe(
-            audio, language=self.cfg.language, word_timestamps=True, vad_filter=False,
+            audio, language=self.cfg.language, word_timestamps=True, vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 300}, condition_on_previous_text=False,
             initial_prompt="음... 어... 그, 어, 음, 그러니까 어... 음...")  # 필러워드 누락 방지
-        words, text, n_seg = [], [], 0
+        words, n_seg = [], 0
         for seg in segments:
             n_seg += 1
-            text.append(seg.text.strip())
             for w in seg.words or []:
                 words.append({"word": w.word.strip(), "start": w.start, "end": w.end})
             self.log(f"  전사 {seg.end:.0f}/{self.duration:.0f}초")
+        words, dropped = drop_repeat_runs(words)
+        if dropped:
+            self.log(f"  경고: 같은 단어가 5번 넘게 연속된 환각 의심 구간 {dropped}개 단어 제거")
         self.log(f"  전사 완료: 세그먼트 {n_seg}개, 단어 {len(words)}개")
-        return {"words": words, "text": " ".join(text)}
+        return {"words": words, "text": " ".join(w["word"] for w in words)}
 
     # 2) 컷 편집 (컷 구간 계산만, 렌더는 최종 단계)
     def _cuts(self):

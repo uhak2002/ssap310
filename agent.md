@@ -8,10 +8,12 @@
 |---|---|---|---|
 | 전사 | `Job._transcribe` | 영상 | `transcribe.json` |
 | 컷 편집 | `Job._cuts` | 전사 | `cuts.json` |
+| 말투 다듬기 | `Job._tone` | 컷 편집 | `tone.json` |
+| 자막 | `Job._subtitles` | 말투 다듬기 | `subtitles.json`, `subs.ass` |
 | 기획 | `Job._plan` | 컷 편집 | `plan.json` |
 | 이미지 생성 | `Job._images` | 기획 | `images.json` |
 | 개인정보 탐지 | `Job._pii` | 컷 편집 | `pii.json` |
-| 최종 렌더 | `Job._render` | 컷·이미지·탐지 | `output/<영상>_edited.mp4` |
+| 최종 렌더 | `Job._render` | 컷·자막·이미지·탐지 | `output/<영상>_edited.mp4` |
 
 ## 실행·검증
 ```bash

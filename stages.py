@@ -22,14 +22,16 @@ import cv2
 import pii
 import scenes as scn
 
-STAGES = ["transcribe", "cuts", "plan", "images", "pii", "render"]
-LABELS = {"transcribe": "전사 (faster-whisper)", "cuts": "컷 편집", "plan": "시각 요소 기획",
-          "images": "이미지 생성", "pii": "개인정보 탐지", "render": "최종 렌더"}
-PIPELINE_TEXT = "전사 → 컷 편집 → 시각 요소 기획 → 이미지 생성 → 개인정보 탐지 → 최종 렌더"
-DEPS = {"transcribe": [], "cuts": ["transcribe"], "plan": ["cuts"], "images": ["plan"],
-        "pii": ["cuts"], "render": ["cuts", "images", "pii"]}
+STAGES = ["transcribe", "cuts", "tone", "subtitles", "plan", "images", "pii", "render"]
+LABELS = {"transcribe": "전사 (faster-whisper)", "cuts": "컷 편집", "tone": "말투 다듬기", "subtitles": "자막",
+          "plan": "시각 요소 기획", "images": "이미지 생성", "pii": "개인정보 탐지", "render": "최종 렌더"}
+PIPELINE_TEXT = "전사 → 컷 편집 → 말투 다듬기 → 자막 → 시각 요소 기획 → 이미지 생성 → 개인정보 탐지 → 최종 렌더"
+DEPS = {"transcribe": [], "cuts": ["transcribe"], "tone": ["cuts"], "subtitles": ["tone"], "plan": ["cuts"],
+        "images": ["plan"], "pii": ["cuts"], "render": ["cuts", "subtitles", "images", "pii"]}
 PARAMS = {
     "transcribe": ["whisper_model", "language"],
+    "tone": ["tone", "tone_style", "claude_model", "subtitle_chars"],
+    "subtitles": ["subtitles", "subtitle_position", "subtitle_font", "subtitle_size"],
     "cuts": ["cut", "silence_db", "min_silence", "keep_silence", "remove_stutters"],
     "plan": ["illustrations", "logos", "max_scenes_per_min", "claude_model"],
     "images": ["image_provider", "image_model", "image_quality"],
@@ -54,6 +56,13 @@ class Cfg:
     min_silence: float = 0.6
     keep_silence: float = 0.3
     remove_stutters: bool = True
+    tone: bool = False  # 말투 다듬기 (Claude, 자막 문장만 수정)
+    tone_style: str = "친근하고 또렷한 존댓말, 군더더기 없이 간결하게"
+    subtitles: bool = False  # 자막 입히기
+    subtitle_chars: int = 16  # 한 줄 글자 수 (자막은 최대 2줄)
+    subtitle_position: str = "bottom"  # bottom | center | top
+    subtitle_font: str = "Malgun Gothic"
+    subtitle_size: float = 0.045  # 영상 높이 대비 글자 크기
     illustrations: bool = True
     ill_mode: str = "center"  # center(중앙 카드) | cutaway(전체 화면) | pip(우측 카드)
     logos: bool = True
@@ -80,7 +89,11 @@ class Cfg:
             whisper_model=e("WHISPER_MODEL", "auto"), whisper_device=e("WHISPER_DEVICE", "auto"),
             language=e("LANGUAGE", "ko"), silence_db=float(e("SILENCE_DB", "-35")),
             min_silence=float(e("MIN_SILENCE", "0.6")), keep_silence=float(e("KEEP_SILENCE", "0.3")),
-            remove_stutters=_b("REMOVE_STUTTERS", True), illustrations=_b("ILLUSTRATIONS", True),
+            remove_stutters=_b("REMOVE_STUTTERS", True),
+            tone=_b("TONE", False), tone_style=e("TONE_STYLE", cls.tone_style),
+            subtitles=_b("SUBTITLES", False), subtitle_chars=int(e("SUBTITLE_CHARS", "16")),
+            subtitle_position=e("SUBTITLE_POSITION", "bottom"), subtitle_font=e("SUBTITLE_FONT", "Malgun Gothic"),
+            subtitle_size=float(e("SUBTITLE_SIZE", "0.045")), illustrations=_b("ILLUSTRATIONS", True),
             ill_mode=e("ILLUSTRATION_MODE", "center"), logos=_b("LOGOS", True), logo_dir=e("LOGO_DIR", "./로고"),
             max_scenes_per_min=float(e("MAX_SCENES_PER_MIN", "1.5")), claude_model=e("CLAUDE_MODEL", "claude-opus-5-5"),
             image_provider=e("IMAGE_PROVIDER", "auto"), image_model=e("IMAGE_MODEL", "gpt-image-1"),
@@ -98,8 +111,8 @@ class Cfg:
 
 
 # ---------- 공용 도구 ----------
-def run(cmd):
-    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+def run(cmd, cwd=None):
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd)
     if r.returncode != 0:
         raise RuntimeError(f"명령 실패: {' '.join(map(str, cmd[:6]))}...\n{r.stderr[-1200:]}")
     return r
@@ -185,6 +198,67 @@ def pixelate(frame, box, block=14):
         return
     small = cv2.resize(frame[y0:y1, x0:x1], (max(1, (x1 - x0) // block), max(1, (y1 - y0) // block)))
     frame[y0:y1, x0:x1] = cv2.resize(small, (x1 - x0, y1 - y0), interpolation=cv2.INTER_NEAREST)
+
+
+# ---------- 자막 ----------
+def build_cues(words, keeps, max_chars):
+    """컷 편집 후 타임라인 기준 자막 구간. 추임새·잘린 단어는 빼고, 쉼·길이·문장 끝에서 끊는다."""
+    mapped = []
+    for w in words:
+        if norm(w["word"]) in FILLERS:
+            continue
+        s, e = map_time(w["start"], keeps), map_time(w["end"], keeps)
+        if e - s > 0.02:
+            mapped.append({"word": w["word"], "start": s, "end": e})
+    cues, cur = [], []
+
+    def text(ws):
+        return " ".join(x["word"] for x in ws)
+
+    def flush():
+        if cur:
+            cues.append({"start": round(cur[0]["start"], 2), "end": round(cur[-1]["end"], 2), "text": text(cur)})
+            cur.clear()
+
+    for w in mapped:
+        if cur and (len(text(cur + [w])) > max_chars * 2 or w["end"] - cur[0]["start"] > 3.5
+                    or w["start"] - cur[-1]["end"] > 0.6):
+            flush()
+        cur.append(w)
+        if re.search(r"[.?!]$|[다요죠까]$", w["word"]) and len(text(cur)) >= max_chars:
+            flush()
+    flush()
+    for i, q in enumerate(cues):  # 너무 짧게 스쳐가지 않도록 최소 0.6초
+        nxt = cues[i + 1]["start"] if i + 1 < len(cues) else q["end"] + 0.6
+        q["end"] = round(min(max(q["end"], q["start"] + 0.6), nxt), 2)
+    return cues
+
+
+def _wrap2(text, max_chars):
+    if len(text) <= max_chars or " " not in text:
+        return text
+    mid = len(text) // 2
+    i = min((k for k, ch in enumerate(text) if ch == " "), key=lambda k: abs(k - mid))
+    return text[:i] + "\\N" + text[i + 1:]
+
+
+def build_ass(cues, W, H, cfg):
+    def t(sec):
+        return f"{int(sec // 3600)}:{int(sec % 3600 // 60):02d}:{sec % 60:05.2f}"
+
+    size = int(H * cfg.subtitle_size)
+    align = {"bottom": 2, "center": 5, "top": 8}.get(cfg.subtitle_position, 2)
+    margin_v = int(H * 0.10) if align != 5 else 0
+    head = (f"[Script Info]\nScriptType: v4.00+\nPlayResX: {W}\nPlayResY: {H}\nWrapStyle: 0\n\n"
+            "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+            "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+            "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+            f"Style: Default,{cfg.subtitle_font},{size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,"
+            f"100,100,0,0,1,{max(2, size // 12)},0,{align},{int(W * 0.06)},{int(W * 0.06)},{margin_v},1\n\n"
+            "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
+    lines = [f"Dialogue: 0,{t(q['start'])},{t(q['end'])},Default,,0,0,0,,"
+             f"{_wrap2(q['text'].replace('{', '(').replace('}', ')'), cfg.subtitle_chars)}" for q in cues]
+    return head + "\n".join(lines) + "\n"
 
 
 # ---------- 작업(영상 하나) ----------
@@ -329,7 +403,57 @@ class Job:
         return {"cuts": cuts, "keeps": keeps, "removed": removed, "spoken": spoken,
                 "edited_duration": dur - removed}
 
-    # 3) 기획 (Claude)
+    # 3) 말투 다듬기: 자막 문장만 다듬는다 (음성은 그대로이므로 의미·고유명사는 바꾸지 않는다)
+    def _tone(self):
+        c = self.cfg
+        keeps = [tuple(k) for k in self.load("cuts")["keeps"]] or [(0, self.duration)]
+        cues = build_cues(self.load("transcribe")["words"], keeps, c.subtitle_chars)
+        for q in cues:
+            q["orig"] = q["text"]
+        if not c.tone:
+            self.log(f"  말투 다듬기 꺼짐 → 원문 그대로 (자막 {len(cues)}줄)")
+            return {"cues": cues, "refined": False}
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            self.log("  ANTHROPIC_API_KEY 없음 → 말투 다듬기 건너뜀 (설정에서 키를 입력하세요)")
+            return {"cues": cues, "refined": False}
+        import anthropic
+        client, changed = anthropic.Anthropic(), 0
+        for i in range(0, len(cues), 50):
+            chunk = [q["text"] for q in cues[i:i + 50]]
+            prompt = (f"영상 자막 문장 목록입니다. 아래 말투 규칙에 맞게 다듬으세요.\n말투 규칙: {c.tone_style}\n"
+                      "규칙:\n- 의미, 사실, 숫자, 고유명사(학교·지역·제도 이름)는 절대 바꾸지 않기\n"
+                      "- 각 문장 길이는 원문과 비슷하게 (±20%)\n- 개수와 순서를 그대로 유지, 합치거나 나누지 않기\n"
+                      f"- JSON 문자열 배열만 출력\n\n{json.dumps(chunk, ensure_ascii=False)}")
+            try:
+                msg = client.messages.create(model=c.claude_model, max_tokens=4000,
+                                             messages=[{"role": "user", "content": prompt}])
+                m = re.search(r"\[.*\]", "".join(b.text for b in msg.content if b.type == "text"), re.S)
+                arr = json.loads(m.group(0))
+            except Exception as e:
+                err = "크레딧이 부족합니다. Anthropic 콘솔에서 충전하세요." if "credit balance" in str(e) else str(e)[:200]
+                raise RuntimeError(f"말투 다듬기 실패 — {err}") from None
+            if len(arr) != len(chunk):  # 개수가 어긋나면 이 묶음은 원문 유지
+                self.log("  경고: 응답 개수가 달라 이 묶음은 원문 유지")
+                continue
+            for j, new in enumerate(arr):
+                new = str(new).strip()
+                if new and new != chunk[j] and len(new) <= len(chunk[j]) * 1.5 + 4:
+                    cues[i + j]["text"] = new
+                    changed += 1
+        self.log(f"  자막 {len(cues)}줄 중 {changed}줄 말투 수정")
+        return {"cues": cues, "refined": True}
+
+    # 4) 자막 파일(ASS) 생성. 입히기는 최종 렌더에서
+    def _subtitles(self):
+        if not self.cfg.subtitles:
+            self.log("  자막 꺼짐 → 건너뜀")
+            return {"ass": None, "count": 0}
+        cues = self.load("tone")["cues"]
+        (self.dir / "subs.ass").write_text(build_ass(cues, self.W, self.H, self.cfg), encoding="utf-8-sig")
+        self.log(f"  자막 {len(cues)}줄 생성 (위치 {self.cfg.subtitle_position}, 글꼴 {self.cfg.subtitle_font})")
+        return {"ass": "subs.ass", "count": len(cues)}
+
+    # 5) 기획 (Claude)
     def _logo_files(self):
         d = Path(self.cfg.logo_dir)
         files = [p for ext in ("png", "jpg", "jpeg", "webp") for p in d.glob(f"*.{ext}")] if d.is_dir() else []
@@ -466,15 +590,31 @@ class Job:
         items = [{**s, "kind": "scene"} for s in plan_imgs["scenes"]] + [{**l, "kind": "logo"} for l in plan["logos"]]
         final = Path(c.out_dir) / f"{self.video.stem}_edited.mp4"
         final.parent.mkdir(parents=True, exist_ok=True)
+        sub = self.load("subtitles")
         if items:
             self.log(f"  오버레이 {len(items)}개 합성 중")
-            self._overlay(cur, final, items)
-        else:
+            nxt = self.dir / "overlay.mp4" if sub["ass"] else final
+            self._overlay(cur, nxt, items)
+            if sub["ass"]:
+                temps.append(nxt)
+            cur = nxt
+        if sub["ass"]:
+            self.log(f"  자막 {sub['count']}줄 입히는 중")
+            self._burn(cur, final, sub["ass"])
+        elif Path(cur) != final:
             shutil.copy2(cur, final)
         for t in temps:
             t.unlink(missing_ok=True)
         self.log(f"  저장: {final}")
         return {"output": str(final.resolve())}
+
+    def _burn(self, src, dst, ass_name):
+        """ASS 자막을 영상에 입힌다. 경로 이스케이프를 피하려고 작업 폴더에서 실행한다."""
+        fonts = os.environ.get("SUBTITLE_FONTS_DIR") or ("C:/Windows/Fonts" if Path("C:/Windows/Fonts").is_dir() else "")
+        # 윈도 경로의 ':' 는 따옴표 안에서 '\:' 로 이스케이프해야 필터 파서가 인식한다
+        flt = f"subtitles={ass_name}" + (f":fontsdir='{fonts.replace(':', chr(92) + ':')}'" if fonts else "")
+        run(["ffmpeg", "-y", "-hide_banner", "-i", str(Path(src).resolve()), "-vf", flt, *video_args(self.cfg),
+             "-c:a", "copy", str(Path(dst).resolve())], cwd=str(self.dir))
 
     def _apply_cuts(self, dst, keeps, mutes):
         expr = "+".join(f"between(t,{s:.3f},{e:.3f})" for s, e in keeps)

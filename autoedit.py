@@ -20,6 +20,8 @@ def main():
     ap.add_argument("--stage", choices=stages.STAGES, default="render")
     ap.add_argument("--force", action="store_true", help="지정한 단계의 캐시를 무시하고 다시 실행")
     ap.add_argument("--dry-run", action="store_true", help="전사와 컷 계산까지만 실행")
+    ap.add_argument("--tone", action="store_true", help="말투 다듬기 켜기 (TONE=true)")
+    ap.add_argument("--subtitles", action="store_true", help="자막 입히기 켜기 (SUBTITLES=true)")
     ap.add_argument("--no-cut", action="store_true")
     ap.add_argument("--no-illustrations", action="store_true")
     ap.add_argument("--no-logos", action="store_true")
@@ -32,7 +34,8 @@ def main():
     cfg = stages.Cfg.from_env(
         cut=False if a.no_cut else None, illustrations=False if a.no_illustrations else None,
         logos=False if a.no_logos else None, mosaic=False if a.no_mosaic else None,
-        faces=True if a.faces else None, mute_pii=True if a.mute_pii else None, ill_mode=a.mode)
+        faces=True if a.faces else None, mute_pii=True if a.mute_pii else None, ill_mode=a.mode,
+        tone=True if a.tone else None, subtitles=True if a.subtitles else None)
     job = stages.Job(a.video, cfg)
     job.header()
     target = "cuts" if a.dry_run else a.stage

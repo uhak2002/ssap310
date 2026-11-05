@@ -20,7 +20,8 @@ UPLOADS, SAMPLES = ROOT / "uploads", ROOT / "samples"
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".m4v"}
 OPTION_KEYS = {"cut", "illustrations", "logos", "mosaic", "faces", "mute_pii", "ill_mode", "whisper_model",
                "image_provider", "silence_db", "min_silence", "keep_silence", "ocr_interval", "image_quality",
-               "max_scenes_per_min", "remove_stutters"}
+               "max_scenes_per_min", "remove_stutters", "tone", "subtitles", "tone_style", "subtitle_position",
+               "subtitle_chars"}
 KEYS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
 
 app = FastAPI()

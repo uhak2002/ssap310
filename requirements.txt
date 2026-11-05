@@ -6,3 +6,9 @@ anthropic
 openai
 pillow
 easyocr
+fastapi
+uvicorn
+python-multipart
+google-auth
+google-auth-oauthlib
+google-api-python-client

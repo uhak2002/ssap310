@@ -13,8 +13,9 @@ from dotenv import load_dotenv, set_key
 ENV = Path(__file__).resolve().parent / ".env"
 load_dotenv(ENV)
 
-# 읽기(내려받기)와 "이 앱이 만든 파일"만 쓰기(올리기). 드라이브 전체 쓰기 권한은 요청하지 않는다.
-SCOPES = ["https://www.googleapis.com/auth/drive.readonly", "https://www.googleapis.com/auth/drive.file"]
+# 이미 만들어 둔 input/output 폴더(앱이 만든 폴더가 아님)에 읽고 쓰려면 drive 전체 범위가 필요하다.
+# 과제가 끝나면 구글 계정의 '타사 앱 액세스'에서 연결을 해제한다.
+SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 
 def main():

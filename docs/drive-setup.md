@@ -44,7 +44,9 @@ python drive_io.py upload output/영상_edited.mp4 --folder <output 폴더 링�
 3. `.env` 에 `GDRIVE_CLIENT_ID`, `GDRIVE_CLIENT_SECRET` 입력 (채팅에 붙여 넣지 않는다)
 4. `python drive_auth.py` → 브라우저 로그인·허용 → `.env` 에 `GDRIVE_REFRESH_TOKEN` 자동 저장
 
-방식 B 는 서비스 계정 변수(`GDRIVE_SERVICE_ACCOUNT_JSON`)가 **비어 있을 때** 쓰인다. 전환하려면 그 줄을 비운다.
+OAuth 세 값이 **모두 있으면 OAuth 가 우선** 쓰이고, 없으면 서비스 계정을 쓴다. 따로 서비스 계정 줄을 지울 필요는 없다.
+요청 권한은 드라이브 전체 읽기·쓰기다(앱이 만들지 않은 input/output 폴더에 올리려면 필요). 과제가 끝나면 연결을 해제한다.
+OAuth 클라이언트는 Drive API 가 켜져 있는 프로젝트(서비스 계정과 같은 프로젝트)에서 만드는 것이 가장 간단하다.
 
 ## 자동 실행 (미션: 편집 → 드라이브 업로드 → 공유 링크)
 ```bash

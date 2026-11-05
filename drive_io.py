@@ -17,15 +17,16 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
-SCOPES = ["https://www.googleapis.com/auth/drive.readonly", "https://www.googleapis.com/auth/drive.file"]
+# 이미 만들어 둔 input/output 폴더(앱이 만든 폴더가 아님)에 올리려면 drive.file 만으로는 부족해서 drive 전체 범위를 쓴다
+SCOPES = ["https://www.googleapis.com/auth/drive"]
 NEED = ["GDRIVE_CLIENT_ID", "GDRIVE_CLIENT_SECRET", "GDRIVE_REFRESH_TOKEN"]
 
 
 def service():
-    """서비스 계정(GDRIVE_SERVICE_ACCOUNT_JSON 또는 _FILE)이 있으면 그것을, 없으면 OAuth 세 값을 쓴다."""
+    """OAuth 세 값이 모두 있으면 OAuth(내 계정, 내 용량)를, 없으면 서비스 계정을 쓴다."""
     from googleapiclient.discovery import build
     sa_json, sa_file = os.environ.get("GDRIVE_SERVICE_ACCOUNT_JSON"), os.environ.get("GDRIVE_SERVICE_ACCOUNT_FILE")
-    if sa_json or sa_file:
+    if (sa_json or sa_file) and not all(os.environ.get(k) for k in NEED):
         import json
         from google.oauth2 import service_account
         info = json.loads(sa_json) if sa_json else json.loads(Path(sa_file).read_text(encoding="utf-8"))

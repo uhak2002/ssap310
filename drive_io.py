@@ -51,9 +51,11 @@ def file_id(s):
     return next(g for g in m.groups() if g) if m else s.strip()
 
 
-def list_videos(folder):
+def list_videos(folder, only_video=True):
+    """폴더의 파일 목록. only_video=False 면 영상 외 파일(pptx, docx, pdf 등)도 포함."""
     svc = service()
-    q = f"'{file_id(folder)}' in parents and mimeType contains 'video/' and trashed = false"
+    kind = " and mimeType contains 'video/'" if only_video else " and mimeType != 'application/vnd.google-apps.folder'"
+    q = f"'{file_id(folder)}' in parents{kind} and trashed = false"
     res = svc.files().list(q=q, fields="files(id,name,size,modifiedTime)", orderBy="modifiedTime desc",
                            pageSize=100, supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
     return res.get("files", [])
@@ -81,7 +83,9 @@ def upload(path, folder=None, share=False):
     body = {"name": path.name}
     if folder:
         body["parents"] = [file_id(folder)]
-    media = MediaFileUpload(str(path), mimetype="video/mp4", resumable=True, chunksize=16 * 1024 * 1024)
+    import mimetypes
+    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"  # mp4, pptx, docx, pdf 등 확장자로 판단
+    media = MediaFileUpload(str(path), mimetype=mime, resumable=True, chunksize=16 * 1024 * 1024)
     req = svc.files().create(body=body, media_body=media, fields="id,webViewLink", supportsAllDrives=True)
     resp = None
     try:
@@ -101,7 +105,9 @@ def upload(path, folder=None, share=False):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("list").add_argument("folder")
+    lp = sub.add_parser("list")
+    lp.add_argument("folder")
+    lp.add_argument("--all", action="store_true", help="영상 외 파일(pptx, docx, pdf 등)도 표시")
     d = sub.add_parser("download")
     d.add_argument("file")
     d.add_argument("--out", default="samples")
@@ -111,7 +117,7 @@ def main():
     u.add_argument("--share", action="store_true")
     a = ap.parse_args()
     if a.cmd == "list":
-        for f in list_videos(a.folder):
+        for f in list_videos(a.folder, only_video=not a.all):
             print(f"{f['id']}  {int(f.get('size', 0)) / 1e6:7.1f}MB  {f['modifiedTime'][:10]}  {f['name']}")
     elif a.cmd == "download":
         print(f"저장: {download(a.file, a.out)}")
